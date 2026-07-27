@@ -5,7 +5,6 @@ include(kvasir/cmake/kvasir.cmake)
 project("JBC Solder Station" VERSION 0.1.0)
 
 include(kvasir/cmake/util.cmake)
-add_subdirectory(kvasir_devices)
 
 add_executable(debug src/main.cpp)
 target_configure_kvasir(debug OPTIMIZATION_STRATEGY size USE_LOG)
