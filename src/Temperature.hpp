@@ -8,6 +8,7 @@
 #include <atomic>
 
 #pragma once
+
 template<typename Clock, typename Float_t, typename PidConfig, typename ZCD, typename Evsys>
 struct Temp {
     enum class State : uint8_t {
@@ -30,8 +31,8 @@ struct Temp {
     State                 s{State::init};
     Pid<Clock, PidConfig> pid;
     bool                  heaterOn{false};
-    bool tip1Sleep{false};
-    bool tip1Remove{false};
+    bool                  tip1Sleep{false};
+    bool                  tip1Remove{false};
 
     Float_t setPoint{};
 
@@ -42,9 +43,9 @@ struct Temp {
     using regs = Kvasir::Peripheral::ADC::Registers<>;
 
     std::atomic<bool> newTemp{false};
-    void              adcCallback() {
-        std::uint16_t val = apply(read(regs::RESULT::result));
 
+    void adcCallback() {
+        std::uint16_t val = apply(read(regs::RESULT::result));
 
         if(s == State::wait_temp) {
             Float_t tempVal = val * adcToTempFactor;
@@ -60,9 +61,7 @@ struct Temp {
                 onCyles = static_cast<std::uint16_t>(std::ceil(heatval - Float_t(0.2)));
                 if(onCyles != 0) {
                     offCyles = 10 - onCyles;
-                    if(onCyles == 10) {
-                        offCyles = 0;
-                    }
+                    if(onCyles == 10) { offCyles = 0; }
 
                     --onCyles;
                     apply(HW::heat<true>(), set(heaterPin{}));
@@ -78,13 +77,10 @@ struct Temp {
                 }
             }
 
-
-           UC_LOG_T("{},{},{},{}", lastTempVal, setPoint, lastCurrentVal, heaterOn?50000:0);
+            UC_LOG_T("{},{},{},{}", lastTempVal, setPoint, lastCurrentVal, heaterOn ? 50000 : 0);
         } else if(s == State::wait_current) {
             lastCurrentVal = val;
-            if(heaterOn) {
-                UC_LOG_T("current {}", lastCurrentVal);
-            }
+            if(heaterOn) { UC_LOG_T("current {}", lastCurrentVal); }
             s = State::wait_heater_turn_off;
             apply(write(regs::INPUTCTRL::MUXPOSValC::pin2));
             measureAndDisableTipPosition();
@@ -139,20 +135,14 @@ struct Temp {
         }
     }
 
-    void measureAndDisableTipPosition(){
-        auto const signals = apply(
-                read(
-                        HW::Pin::tip1Sleep{},
-                        HW::Pin::tip1Remove{}
-                ));
-        tip1Sleep = !(get<0>(signals));
-        tip1Remove = !(get<1>(signals));
+    void measureAndDisableTipPosition() {
+        auto const signals = apply(read(HW::Pin::tip1Sleep{}, HW::Pin::tip1Remove{}));
+        tip1Sleep          = !(get<0>(signals));
+        tip1Remove         = !(get<1>(signals));
         apply(clear(HW::Pin::sleepSw{}));
     }
 
-    void enableTipPositionMeasurement(){
-        apply(set(HW::Pin::sleepSw{}));
-    }
+    void enableTipPositionMeasurement() { apply(set(HW::Pin::sleepSw{})); }
 
     void adcinit() {
         using Kvasir::Register::value;
@@ -160,17 +150,14 @@ struct Temp {
 
         apply(
           regs::REFCTRL::overrideDefaults(write(regs::REFCTRL::REFSELValC::arefb)),
-          regs::AVGCTRL::overrideDefaults(
-            write(regs::AVGCTRL::SAMPLENUMValC::_16),
-            write(regs::AVGCTRL::adjres, value<std::uint8_t,0>())),
+          regs::AVGCTRL::overrideDefaults(write(regs::AVGCTRL::SAMPLENUMValC::_16),
+                                          write(regs::AVGCTRL::adjres, value<std::uint8_t, 0>())),
           regs::SAMPCTRL::overrideDefaults(
             write(regs::SAMPCTRL::samplen, value<std::uint8_t, 4>())),
-          regs::CTRLB::overrideDefaults(
-            write(regs::CTRLB::PRESCALERValC::div8),
-            write(regs::CTRLB::RESSELValC::_16bit)),
-          regs::INPUTCTRL::overrideDefaults(
-            write(regs::INPUTCTRL::MUXPOSValC::pin2),
-            write(regs::INPUTCTRL::MUXNEGValC::gnd)),
+          regs::CTRLB::overrideDefaults(write(regs::CTRLB::PRESCALERValC::div8),
+                                        write(regs::CTRLB::RESSELValC::_16bit)),
+          regs::INPUTCTRL::overrideDefaults(write(regs::INPUTCTRL::MUXPOSValC::pin2),
+                                            write(regs::INPUTCTRL::MUXNEGValC::gnd)),
           regs::EVCTRL::overrideDefaults(set(regs::EVCTRL::startei)),
           set(regs::INTENSET::resrdy));
 
@@ -184,15 +171,13 @@ struct Temp {
 
         Kvasir::BitField<34, 27> const Adc_LinearityCal(NVM_Calibration_Data);
         Kvasir::BitField<37, 35> const Adc_BiasCal(NVM_Calibration_Data);
-        apply(
-          write(regs::CALIB::linearity_cal, Adc_LinearityCal.asValue()),
-          write(regs::CALIB::bias_cal, Adc_BiasCal.asValue()));
-        apply(Evsys::template setupEventChannel<
-              Evsys::Channel::ch0,
-              Evsys::Generator::eic_extint12,
-              Evsys::User::adc_start,
-              Evsys::Path::asynchronous,
-              Evsys::Edge::no_evt_output>());
+        apply(write(regs::CALIB::linearity_cal, Adc_LinearityCal.asValue()),
+              write(regs::CALIB::bias_cal, Adc_BiasCal.asValue()));
+        apply(Evsys::template setupEventChannel<Evsys::Channel::ch0,
+                                                Evsys::Generator::eic_extint12,
+                                                Evsys::User::adc_start,
+                                                Evsys::Path::asynchronous,
+                                                Evsys::Edge::no_evt_output>());
         apply(regs::CTRLA::overrideDefaults(set(regs::CTRLA::enable)));
         apply(makeEnable(Kvasir::Interrupt::adc));
     }

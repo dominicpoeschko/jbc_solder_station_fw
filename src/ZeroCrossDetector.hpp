@@ -4,11 +4,10 @@
 #pragma once
 
 #include "HWConfig.hpp"
-#include <chrono>
-#include <atomic>
 #include "kvasir/Io/Io.hpp"
 
-#include "HWConfig.hpp"
+#include <atomic>
+#include <chrono>
 
 template<typename Clock, typename ZCpin>
 struct ZeroCrossDectecor {
@@ -27,16 +26,14 @@ struct ZeroCrossDectecor {
         auto const now = Clock::now();
         edge           = !edge;
         if(edge) {
-            if(currentAverages != averages) {
-                ++currentAverages;
-            }
+            if(currentAverages != averages) { ++currentAverages; }
         }
 
         auto& currentAvg = edge ? avgE1 : avgE2;
         auto& nextAvg    = edge ? avgE2 : avgE1;
 
         currentAvg
-                = (currentAvg * currentAverages + (now - lastCrossing) * 8) / (currentAverages + 8);
+          = (currentAvg * currentAverages + (now - lastCrossing) * 8) / (currentAverages + 8);
 
         nextCrossing.store(now + nextAvg, std::memory_order_relaxed);
         nextPeak.store(now + nextAvg / 2, std::memory_order_relaxed);

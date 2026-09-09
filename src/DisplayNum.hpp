@@ -1,12 +1,12 @@
 //
 // Created by patrick on 1/5/22.
 //
-#include <optional>
-#include <charconv>
-#include <utility>
+#include "kvasir/Util/using_literals.hpp"
+
 #include <algorithm>
 #include <array>
-
-#include "kvasir/Util/using_literals.hpp"
+#include <charconv>
+#include <optional>
+#include <utility>
 
 #pragma once

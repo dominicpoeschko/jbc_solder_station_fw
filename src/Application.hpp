@@ -39,15 +39,18 @@ struct Application {
     struct Init {};
 
     struct Sleep {
-        explicit Sleep(time_point_t t_sleep, time_point_t t_standby)
+        explicit Sleep(time_point_t t_sleep,
+                       time_point_t t_standby)
           : timeOutSleep{t_sleep}
           , timeOutStandby{t_standby} {}
+
         time_point_t timeOutSleep{};
         time_point_t timeOutStandby{};
     };
 
     struct Solder {
         explicit Solder(time_point_t t) : timeOutStandby{t} {}
+
         time_point_t timeOutStandby{};
     };
 
@@ -66,37 +69,35 @@ struct Application {
         AdcIsr::temp = &heaterManager;
         RotaryEncoder::cnt.store(solderTemp_, std::memory_order_relaxed);
     }
+
     bool tip1oldSleep{false};
     bool tip1oldRemoved{false};
-
 
     template<class... Ts>
     struct overloaded : Ts... {
         using Ts::operator()...;
     };
     template<class... Ts>
-    overloaded(Ts...)->overloaded<Ts...>;
+    overloaded(Ts...) -> overloaded<Ts...>;
 
-    template<typename Variant, typename... Matchers>
-    auto match(Variant&& variant, Matchers&&... matchers) {
-        return std::visit(overloaded{std::forward<Matchers>(matchers)...}, std::forward<Variant>(variant));
+    template<typename Variant,
+             typename... Matchers>
+    auto match(Variant&& variant,
+               Matchers&&... matchers) {
+        return std::visit(overloaded{std::forward<Matchers>(matchers)...},
+                          std::forward<Variant>(variant));
     }
-
 
     void handler() {
         auto const currentTime{Clock::now()};
         //TODO
-        bool tip1Sleep {heaterManager.tip1Sleep};
-        bool tip1Removed{heaterManager.tip1Remove};
+        bool         tip1Sleep{heaterManager.tip1Sleep};
+        bool         tip1Removed{heaterManager.tip1Remove};
         std::uint8_t handlingEvent{0};
-        if(tip1Sleep != tip1oldSleep){
-            ++handlingEvent;
-        }
-        if(tip1Removed != tip1oldRemoved){
-            ++handlingEvent;
-        }
+        if(tip1Sleep != tip1oldSleep) { ++handlingEvent; }
+        if(tip1Removed != tip1oldRemoved) { ++handlingEvent; }
         tip1oldRemoved = tip1Removed;
-        tip1oldSleep = tip1Sleep;
+        tip1oldSleep   = tip1Sleep;
 
         preSetTemp_ = RotaryEncoder::cnt.load(std::memory_order_relaxed);
         //display.setText("1223", std::nullopt);
@@ -115,8 +116,8 @@ struct Application {
                 }
                 break;
             //TODO change button type
-            case Button::Event::Type::Hit: break;
-            case Button::Event::Type::Long: break;
+            case Button::Event::Type::Hit:          break;
+            case Button::Event::Type::Long:         break;
             case Button::Event::Type::Release_Long: break;
             }
         });
@@ -127,17 +128,14 @@ struct Application {
             next += 10ms;
         }
 
-        if(currentTime > failTime) {
-            st_ = Shutdown{};
-        }
+        if(currentTime > failTime) { st_ = Shutdown{}; }
 
         st_ = match(
           st_,
           [&]([[maybe_unused]] Init const& state) -> stateMachine {
               //Do init steps
-              return Sleep{
-                currentTime + timingConfig::sleepTimeOut,
-                currentTime + timingConfig::standbyTimeOut};
+              return Sleep{currentTime + timingConfig::sleepTimeOut,
+                           currentTime + timingConfig::standbyTimeOut};
           },
           [&](Sleep const& state) -> stateMachine {
               if(currentTime > state.timeOutSleep) {
@@ -147,48 +145,35 @@ struct Application {
                   ledDriver.set(0, 3, 0);
               }
 
-              if(currentTime > state.timeOutStandby) {
-                  return Standby{};
-              }
-              if(tip1Sleep) {
-                  return state;
-              }
+              if(currentTime > state.timeOutStandby) { return Standby{}; }
+              if(tip1Sleep) { return state; }
               return Solder{currentTime + timingConfig::standbyTimeOut};
           },
           [&](Solder const& state) -> stateMachine {
               ledDriver.set(0, 0, 0);
               heaterManager.setTemp(solderTemp_);
               if(tip1Sleep) {
-                  return Sleep{
-                    currentTime + timingConfig::sleepTimeOut,
-                    currentTime + timingConfig::standbyTimeOut};
+                  return Sleep{currentTime + timingConfig::sleepTimeOut,
+                               currentTime + timingConfig::standbyTimeOut};
               }
-              if(tip1Removed) {
-                  return Remove{};
-              }
-              if(currentTime > state.timeOutStandby) {
-                  return Standby{};
-              }
+              if(tip1Removed) { return Remove{}; }
+              if(currentTime > state.timeOutStandby) { return Standby{}; }
               return state;
           },
           [&](Remove const& state) -> stateMachine {
               heaterManager.setTemp(0);
               ledDriver.set(1, 0, 2);
-              if(tip1Removed) {
-                  return state;
-              }
-              return Sleep{
-                currentTime + timingConfig::sleepTimeOut,
-                currentTime + timingConfig::standbyTimeOut};
+              if(tip1Removed) { return state; }
+              return Sleep{currentTime + timingConfig::sleepTimeOut,
+                           currentTime + timingConfig::standbyTimeOut};
           },
           [&](Standby const& state) -> stateMachine {
               ledDriver.set(1, 1, 0);
               heaterManager.setTemp(0);
               if(handlingEvent > 0) {
                   handlingEvent = 0;
-                  return Sleep{
-                    currentTime + timingConfig::sleepTimeOut,
-                    currentTime + timingConfig::standbyTimeOut};
+                  return Sleep{currentTime + timingConfig::sleepTimeOut,
+                               currentTime + timingConfig::standbyTimeOut};
               }
               return state;
           },
@@ -219,9 +204,9 @@ struct Application {
         TempOneWire::handler();
     }
 
-    void fault(){
+    void fault() {
         //Display ERR
-        ledDriver.set(10,0,0);
+        ledDriver.set(10, 0, 0);
         ledDriver.handler();
         display.handler();
     }

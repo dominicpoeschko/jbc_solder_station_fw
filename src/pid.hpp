@@ -14,7 +14,8 @@ struct Pid {
 
     tp prevTime{};
 
-    T update(T setpoint, T measurment) {
+    T update(T setpoint,
+             T measurment) {
         auto const currentTime = Clock::now();
         T const    error       = setpoint - measurment;
 
@@ -41,7 +42,7 @@ struct Pid {
                            / (T{2} * Config::tau + deltaT);
 
             out += integrator + differentiator;
-       /*     KL_T(
+            /*     KL_T(
               "{:10.1f} {:10.1f} {:10.6f} {:10.6f} {:10.6f} {:10.6f} {}",
               setpoint,
               measurment,
@@ -56,9 +57,9 @@ struct Pid {
         prevMeasurment = measurment;
         prevError      = error;
 
-       // Kvasir::breakPoint();
+        // Kvasir::breakPoint();
         auto ret = std::clamp(out, Config::limMin, Config::limMax);
-      // Kvasir::breakPoint();
+        // Kvasir::breakPoint();
         return ret;
         //auto var = std::clamp(out,Config::limMin, Config::limMax);
         /*  if(out > Config::limMax){

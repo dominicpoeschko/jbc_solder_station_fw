@@ -13,6 +13,7 @@ template<>
 struct ComBackend<uc_log::Tag::User>
   : public DefaultRttComBackend<DebuggerPresentFunction, 512, 4096, rtt::BufferMode::skip> {};
 }   // namespace uc_log
+
 // need to be included first
 
 #include "chip/Interrupt.hpp"
@@ -29,6 +30,7 @@ struct SystickClockConfig {
     static constexpr auto clockSpeed     = ClockSpeed;
     static constexpr auto minOverrunTime = std::chrono::hours(24 * 365) * 20;
 };
+
 using SystickClock = Kvasir::Systick::SystickClockBase<SystickClockConfig>;
 }   // namespace HW
 
@@ -104,48 +106,39 @@ struct ClockSettings {
         static constexpr auto GENDIV_div       = 2;
         // 48'000'000=(8000000*(1/(2*(128+1))))*(3095+1+(0/16))/2
 
-        static_assert(
-          ClockSpeed
-            == std::uint64_t(
-              (CrystalSpeed * (1.0 / (2.0 * (double(DPLL_div) + 1.0))))
-              * (double(DPLL_ldr) + 1.0 + (double(DPLL_ldrfrac) / 16.0)) / double(GENDIV_div)),
-          "ClockSpeed wrong");
+        static_assert(ClockSpeed
+                        == std::uint64_t((CrystalSpeed * (1.0 / (2.0 * (double(DPLL_div) + 1.0))))
+                                         * (double(DPLL_ldr) + 1.0 + (double(DPLL_ldrfrac) / 16.0))
+                                         / double(GENDIV_div)),
+                      "ClockSpeed wrong");
 
-        static_assert(
-          ClockSpeed <= 24'000'000 || flash_waitstates == KNR::CTRLB::RWSVal::half,
-          "need flash_waitstates");
+        static_assert(ClockSpeed <= 24'000'000 || flash_waitstates == KNR::CTRLB::RWSVal::half,
+                      "need flash_waitstates");
 
-        apply(KSR::XOSC::overrideDefaults(
-          write(KSR::XOSC::startup, value<std::uint16_t, 15>()),
-          set(KSR::XOSC::ampgc),
-          write(KSR::XOSC::GAINValC::_2),
-          clear(KSR::XOSC::ondemand),
-          set(KSR::XOSC::runstdby),
-          set(KSR::XOSC::xtalen),
-          set(KSR::XOSC::enable)));
+        apply(KSR::XOSC::overrideDefaults(write(KSR::XOSC::startup, value<std::uint16_t, 15>()),
+                                          set(KSR::XOSC::ampgc),
+                                          write(KSR::XOSC::GAINValC::_2),
+                                          clear(KSR::XOSC::ondemand),
+                                          set(KSR::XOSC::runstdby),
+                                          set(KSR::XOSC::xtalen),
+                                          set(KSR::XOSC::enable)));
         // wait for XOSCRDY ready
-        while(!apply(read(KSR::PCLKSR::xoscrdy))) {
-        }
+        while(!apply(read(KSR::PCLKSR::xoscrdy))) {}
 
-        apply(
-          write(KSR::DPLLRATIO::ldr, value<DPLL_ldr>()),
-          write(KSR::DPLLRATIO::ldrfrac, value<DPLL_ldrfrac>()),
-          KSR::DPLLCTRLB::overrideDefaults(
-            write(KSR::DPLLCTRLB::div, value<DPLL_div>()),
-            write(KSR::DPLLCTRLB::REFCLKValC::ref1)),
-          Kvasir::Register::sequencePoint,
-          KSR::DPLLCTRLA::overrideDefaults(
-            clear(KSR::DPLLCTRLA::ondemand),
-            set(KSR::DPLLCTRLA::enable),
-            set(KSR::DPLLCTRLA::runstdby)));
+        apply(write(KSR::DPLLRATIO::ldr, value<DPLL_ldr>()),
+              write(KSR::DPLLRATIO::ldrfrac, value<DPLL_ldrfrac>()),
+              KSR::DPLLCTRLB::overrideDefaults(write(KSR::DPLLCTRLB::div, value<DPLL_div>()),
+                                               write(KSR::DPLLCTRLB::REFCLKValC::ref1)),
+              Kvasir::Register::sequencePoint,
+              KSR::DPLLCTRLA::overrideDefaults(clear(KSR::DPLLCTRLA::ondemand),
+                                               set(KSR::DPLLCTRLA::enable),
+                                               set(KSR::DPLLCTRLA::runstdby)));
         // wait for clkrdy ready
-        while(!apply(read(KSR::DPLLSTATUS::clkrdy))) {
-        }
+        while(!apply(read(KSR::DPLLSTATUS::clkrdy))) {}
 
-        apply(
-          KNR::CTRLB::overrideDefaults(
-            write(KNR::CTRLB::rws, value<KNR::CTRLB::RWSVal, flash_waitstates>())),
-          GenericClockGenerator<0, GeneratorSource::fdpll, GENDIV_div>::enable());
+        apply(KNR::CTRLB::overrideDefaults(
+                write(KNR::CTRLB::rws, value<KNR::CTRLB::RWSVal, flash_waitstates>())),
+              GenericClockGenerator<0, GeneratorSource::fdpll, GENDIV_div>::enable());
 
         /*
         // WD clock
@@ -169,16 +162,16 @@ struct ClockSettings {
 
     static void peripheryClockInit() {
         using namespace Kvasir::GCLK;
-        apply(
-          GenericClockGenerator<3, GeneratorSource::fdpll, 64>::enable(),
-          Kvasir::Register::sequencePoint,
-          PeripheralChannelController<0, Peripheral::sercom1_core>::enable(),
-          PeripheralChannelController<0, Peripheral::eic>::enable(),
-          PeripheralChannelController<0, Peripheral::adc>::enable(),
-          PeripheralChannelController<0, Peripheral::evsys_0>::enable(),
-          PeripheralChannelController<3, Peripheral::sercom3_core>::enable());
+        apply(GenericClockGenerator<3, GeneratorSource::fdpll, 64>::enable(),
+              Kvasir::Register::sequencePoint,
+              PeripheralChannelController<0, Peripheral::sercom1_core>::enable(),
+              PeripheralChannelController<0, Peripheral::eic>::enable(),
+              PeripheralChannelController<0, Peripheral::adc>::enable(),
+              PeripheralChannelController<0, Peripheral::evsys_0>::enable(),
+              PeripheralChannelController<3, Peripheral::sercom3_core>::enable());
     }
 };
+
 /*
 struct DebugUartConfig {
     static constexpr auto clockSpeed = ClockSpeed;
@@ -208,39 +201,36 @@ struct I2CConfig {
 
 struct Fault_CleanUpAction {
     void operator()() {
-        apply(
-          clear(HW::Pin::tip1Sw{}),
-          clear(HW::Pin::tip2Sw{}),
-          clear(HW::Pin::tip3Sw1{}),
-          clear(HW::Pin::tip3Sw2{}),
-          clear(HW::Pin::tipComSw{}),
-          clear(HW::Pin::tip1TcSw{}),
-          clear(HW::Pin::tip2TcSw{}),
-          clear(HW::Pin::tip3TcSw1{}),
-          clear(HW::Pin::tip3TcSw2{}),
-          clear(HW::Pin::sleepSw{}),
-          clear(HW::Pin::piezo{}),
-          clear(HW::Pin::select_24_48{}),
-          clear(HW::Pin::trafoTemp{}));
+        apply(clear(HW::Pin::tip1Sw{}),
+              clear(HW::Pin::tip2Sw{}),
+              clear(HW::Pin::tip3Sw1{}),
+              clear(HW::Pin::tip3Sw2{}),
+              clear(HW::Pin::tipComSw{}),
+              clear(HW::Pin::tip1TcSw{}),
+              clear(HW::Pin::tip2TcSw{}),
+              clear(HW::Pin::tip3TcSw1{}),
+              clear(HW::Pin::tip3TcSw2{}),
+              clear(HW::Pin::sleepSw{}),
+              clear(HW::Pin::piezo{}),
+              clear(HW::Pin::select_24_48{}),
+              clear(HW::Pin::trafoTemp{}));
     }
 };
 
 constexpr Kvasir::Fuses::FuseBits fuseBits() {
     using namespace Kvasir::Fuses;
     FuseBits sollFuseBits{
-      Bod33{
-            Bod33::Action::Reset,
+      Bod33{Bod33::Action::Reset,
             Bod33::Enable::enabled,
             Bod33::Hysteresis::enabled,
             Bod33::Level{40}},
-      Wdt{
-            Wdt::Enable::disabled,
+      Wdt{Wdt::Enable::disabled,
             Wdt::AlwaysOn::disabled,
             Wdt::WindowEnable::disabled,
             Wdt::Period{11},
             Wdt::Window{11},
             Wdt::Offset{11}},
-      Nvm{     Nvm::Bootprot{7}, Nvm::Eeprom{7}, Nvm::Lock{0xffff} }
+      Nvm{Nvm::Bootprot{7}, Nvm::Eeprom{7}, Nvm::Lock{0xffff}}
     };
     return sollFuseBits;
 }
@@ -258,37 +248,35 @@ constexpr auto heat() {
 }
 
 struct PinConfig {
-    static constexpr auto initStepPinConfig = list(
-      makeInput(HW::Pin::tip1Sleep{}),
-      makeInput(HW::Pin::tip1Remove{}),
-      makeInput(HW::Pin::tip2Sleep{}),
-      makeInput(HW::Pin::tip2Remove{}),
-      makeInput(HW::Pin::tip3Sleep{}),
-      makeInput(HW::Pin::tip3Remove{}),
-      makeOutput(HW::Pin::tip1Sw{}),
-      makeOutput(HW::Pin::tip2Sw{}),
-      makeOutput(HW::Pin::tip3Sw1{}),
-      makeOutput(HW::Pin::tip3Sw2{}),
-      makeOutput(HW::Pin::tipComSw{}),
-      makeOutput(HW::Pin::select_24_48{}),
-      makeOutput(HW::Pin::sleepSw{}),
-      makeOutput(HW::Pin::tip1TcSw{}),
-      makeOutput(HW::Pin::tip2TcSw{}),
-      makeOutput(HW::Pin::tip3TcSw1{}),
-      makeOutput(HW::Pin::tip3TcSw2{}),
-      makeOutput(HW::Pin::a2{}),
-      makeOutput(HW::Pin::b10{}),
-      action(Kvasir::Io::Action::PinFunction<1>{}, HW::Pin::vRef{}),
-      action(Kvasir::Io::Action::PinFunction<1>{}, HW::Pin::tempSense{}),
-      action(Kvasir::Io::Action::PinFunction<1>{}, HW::Pin::currentSense{}),
-      //makeOutput(HW::Pin::piezo{})
+    static constexpr auto initStepPinConfig
+      = list(makeInput(HW::Pin::tip1Sleep{}),
+             makeInput(HW::Pin::tip1Remove{}),
+             makeInput(HW::Pin::tip2Sleep{}),
+             makeInput(HW::Pin::tip2Remove{}),
+             makeInput(HW::Pin::tip3Sleep{}),
+             makeInput(HW::Pin::tip3Remove{}),
+             makeOutput(HW::Pin::tip1Sw{}),
+             makeOutput(HW::Pin::tip2Sw{}),
+             makeOutput(HW::Pin::tip3Sw1{}),
+             makeOutput(HW::Pin::tip3Sw2{}),
+             makeOutput(HW::Pin::tipComSw{}),
+             makeOutput(HW::Pin::select_24_48{}),
+             makeOutput(HW::Pin::sleepSw{}),
+             makeOutput(HW::Pin::tip1TcSw{}),
+             makeOutput(HW::Pin::tip2TcSw{}),
+             makeOutput(HW::Pin::tip3TcSw1{}),
+             makeOutput(HW::Pin::tip3TcSw2{}),
+             makeOutput(HW::Pin::a2{}),
+             makeOutput(HW::Pin::b10{}),
+             action(Kvasir::Io::Action::PinFunction<1>{}, HW::Pin::vRef{}),
+             action(Kvasir::Io::Action::PinFunction<1>{}, HW::Pin::tempSense{}),
+             action(Kvasir::Io::Action::PinFunction<1>{}, HW::Pin::currentSense{}),
+             //makeOutput(HW::Pin::piezo{})
 
-      set(HW::Pin::tip1TcSw{}),
-      clear(HW::Pin::sleepSw{}),
-      //set(HW::Pin::sleepSw{}),
-      set(HW::Pin::tip1Sw{})
-
-    );
+             set(HW::Pin::tip1TcSw{}),
+             clear(HW::Pin::sleepSw{}),
+             //set(HW::Pin::sleepSw{}),
+             set(HW::Pin::tip1Sw{}));
     // apply(clear(HW::Pin::tip2TcSw{}));
     // apply(set(HW::Pin::select_24_48{}));
 };

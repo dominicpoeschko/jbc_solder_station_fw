@@ -12,7 +12,9 @@
 #include "kvasir/Util/using_literals.hpp"
 
 #include <compare>
+
 struct EvsysConfig {};
+
 using Clock = HW::SystickClock;
 using Evsys = Kvasir::EVSYS::EvsysBase<EvsysConfig>;
 using I2C   = Kvasir::Sercom::I2C::I2CBehavior<HW::I2CConfig, Clock, 32>;
@@ -41,12 +43,11 @@ struct RotaryConfig {
 };
 
 using Button        = Kvasir::SamPushButton<Clock, HW::Pin::rotarySw, 4, ButtonConfig>;
-using RotaryEncoder = Kvasir::SamRotaryEncoder<
-  Clock,
-  HW::Pin::rotaryA,
-  HW::Pin::rotaryB,
-  Kvasir::SaturatingValue<std::uint16_t, 0, 512>,
-  RotaryConfig>;
+using RotaryEncoder = Kvasir::SamRotaryEncoder<Clock,
+                                               HW::Pin::rotaryA,
+                                               HW::Pin::rotaryB,
+                                               Kvasir::SaturatingValue<std::uint16_t, 0, 512>,
+                                               RotaryConfig>;
 
 using ZCD = ZeroCrossDectecor<Clock, HW::Pin::zeroCross>;
 
@@ -54,7 +55,7 @@ using Eic = Kvasir::EIC::
   EicBase<Clock, EicConfig, ZCD::EicConfig, RotaryEncoder::EicConfig, Button::EicConfig>;
 
 struct TempSaveType {
-    auto          operator<=>(const TempSaveType&) const = default;
+    auto          operator<=>(TempSaveType const&) const = default;
     std::uint16_t temp{};
 };
 
@@ -80,9 +81,9 @@ struct AdcIsr {
     static inline Temp_t* temp{nullptr};
     using InterruptIndex = decltype(Kvasir::Interrupt::adc);
 
-    static constexpr auto initStepInterruptConfig = list(
-      action(Kvasir::Nvic::Action::SetPriority<1>{}, InterruptIndex{}),
-      action(Kvasir::Nvic::Action::clearPending, InterruptIndex{}));
+    static constexpr auto initStepInterruptConfig
+      = list(action(Kvasir::Nvic::Action::SetPriority<1>{}, InterruptIndex{}),
+             action(Kvasir::Nvic::Action::clearPending, InterruptIndex{}));
 
     // ISR
     static void onIsr() {
@@ -97,17 +98,19 @@ struct AdcIsr {
       isr{};
 };
 
-using Startup = Kvasir::Startup::Startup<
-  HW::ClockSettings,
-    HW::ComBackend,
-  Clock,
-  HardFaultHandler,
-  StackProtector,
-  I2C,
-  Eic,
-  Evsys,
-  AdcIsr,
-  RotaryEncoder,
-  Button,
-  HW::PinConfig>;
-
+using Startup = Kvasir::Startup::Startup<HW::ClockSettings,
+                                         HW::ComBackend,
+                                         Clock,
+                                         HardFaultHandler,
+                                         StackProtector,
+                                         I2C,
+                                         Eic,
+                                         Evsys,
+                                         AdcIsr,
+                                         RotaryEncoder,
+                                         // Button is not listed: SamPushButton has no init
+                                         // step, Isr or runtime hook of its own - its pin and
+                                         // edge interrupt come from Button::EicConfig, which
+                                         // Eic above already carries, and the app drives
+                                         // Button::handler() itself.
+                                         HW::PinConfig>;
