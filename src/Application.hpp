@@ -11,8 +11,10 @@
 #include "UnBounce.hpp"
 //#include "LedgedHysteresis.hpp"
 #include "displayManager.hpp"
-#include "kvasir/Devices/Ktd2026.hpp"
 #include "kvasir/Devices/Max31820.hpp"
+
+#include <kvasir/Devices/I2C/Device.hpp>
+#include <kvasir/Devices/I2C/chips/Ktd2026.hpp>
 
 template<typename Clock>
 struct Application {
@@ -20,7 +22,8 @@ struct Application {
 
     Kvasir::Max31820<TempOneWire, Clock> tempSensTransformer;
     DisplayManager<I2C, Clock>           display;
-    Kvasir::Ktd2026<I2C, Clock>          ledDriver;
+    using Rgb = Kvasir::I2C::Chips::Ktd2026<>;
+    Kvasir::I2C::Device<I2C, Clock, Rgb> ledDriver;
     Temp_t                               heaterManager;
 
     //TODO change rotary type to right data type
@@ -103,7 +106,7 @@ struct Application {
         //display.setText("1223", std::nullopt);
         Button::handler([&](auto e, [[maybe_unused]] auto const& t) {
             switch(e) {
-            case Button::Event::Type::Release_Short:
+            case Button::Event::Type::releaseShort:
                 {
                     //        modeChange           = true;
                     //        rotaryMode           = false;
@@ -116,9 +119,9 @@ struct Application {
                 }
                 break;
             //TODO change button type
-            case Button::Event::Type::Hit:          break;
-            case Button::Event::Type::Long:         break;
-            case Button::Event::Type::Release_Long: break;
+            case Button::Event::Type::hit:         break;
+            case Button::Event::Type::longPress:   break;
+            case Button::Event::Type::releaseLong: break;
             }
         });
 
@@ -139,10 +142,10 @@ struct Application {
           },
           [&](Sleep const& state) -> stateMachine {
               if(currentTime > state.timeOutSleep) {
-                  ledDriver.set(0, 0, 3);
+                  ledDriver.template set<Rgb::Colour>({0, 0, 3});
                   heaterManager.setTemp(sleepTemp_);
               } else {
-                  ledDriver.set(0, 3, 0);
+                  ledDriver.template set<Rgb::Colour>({0, 3, 0});
               }
 
               if(currentTime > state.timeOutStandby) { return Standby{}; }
@@ -150,7 +153,7 @@ struct Application {
               return Solder{currentTime + timingConfig::standbyTimeOut};
           },
           [&](Solder const& state) -> stateMachine {
-              ledDriver.set(0, 0, 0);
+              ledDriver.template set<Rgb::Colour>({0, 0, 0});
               heaterManager.setTemp(solderTemp_);
               if(tip1Sleep) {
                   return Sleep{currentTime + timingConfig::sleepTimeOut,
@@ -162,13 +165,13 @@ struct Application {
           },
           [&](Remove const& state) -> stateMachine {
               heaterManager.setTemp(0);
-              ledDriver.set(1, 0, 2);
+              ledDriver.template set<Rgb::Colour>({1, 0, 2});
               if(tip1Removed) { return state; }
               return Sleep{currentTime + timingConfig::sleepTimeOut,
                            currentTime + timingConfig::standbyTimeOut};
           },
           [&](Standby const& state) -> stateMachine {
-              ledDriver.set(1, 1, 0);
+              ledDriver.template set<Rgb::Colour>({1, 1, 0});
               heaterManager.setTemp(0);
               if(handlingEvent > 0) {
                   handlingEvent = 0;
@@ -179,13 +182,13 @@ struct Application {
           },
           [&](Shutdown const& state) -> stateMachine {
               heaterManager.setTemp(0);
-              ledDriver.set(10, 0, 0);
+              ledDriver.template set<Rgb::Colour>({10, 0, 0});
               //To leave this state you must reboot the system
               return state;
           });
 
         if(heaterManager.heaterOn) {
-            ledDriver.set(1, 0, 0);
+            ledDriver.template set<Rgb::Colour>({1, 0, 0});
         } else {
         }
 
@@ -206,7 +209,7 @@ struct Application {
 
     void fault() {
         //Display ERR
-        ledDriver.set(10, 0, 0);
+        ledDriver.template set<Rgb::Colour>({10, 0, 0});
         ledDriver.handler();
         display.handler();
     }

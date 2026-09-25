@@ -9,9 +9,16 @@ struct DebuggerPresentFunction {
 #include "uc_log/DefaultRttComBackend.hpp"
 
 namespace uc_log {
+// A record from an ISR is written with interrupts masked (IsrPolicy::MaskedRecord), so ISRs at
+// different priority levels share the ISR buffer; Startup refuses that mix of levels otherwise.
 template<>
 struct ComBackend<uc_log::Tag::User>
-  : public DefaultRttComBackend<DebuggerPresentFunction, 512, 4096, rtt::BufferMode::skip> {};
+  : public DefaultRttComBackend<DebuggerPresentFunction,
+                                512,
+                                4096,
+                                rtt::BufferMode::skip,
+                                DuplexChannels<>,
+                                IsrPolicy::MaskedRecord> {};
 }   // namespace uc_log
 
 // need to be included first

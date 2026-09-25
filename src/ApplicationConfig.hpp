@@ -17,7 +17,9 @@ struct EvsysConfig {};
 
 using Clock = HW::SystickClock;
 using Evsys = Kvasir::EVSYS::EvsysBase<EvsysConfig>;
-using I2C   = Kvasir::Sercom::I2C::I2CBehavior<HW::I2CConfig, Clock, 32>;
+/// The queued SERCOM master: the same interface the RP2040 and RP2350 buses present, which
+/// is what the kvasir_devices chip descriptions are written against.
+using I2C = Kvasir::Sercom::I2C::I2CBehaviorQueued<HW::I2CConfig, Clock, 8, 16>;
 
 using StackProtector   = Kvasir::StackProtector<>;
 using HardFaultHandler = Kvasir::Fault::Handler<HW::Fault_CleanUpAction>;
