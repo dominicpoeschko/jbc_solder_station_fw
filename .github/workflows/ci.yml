@@ -1,0 +1,61 @@
+name: CI
+
+# host-tests: the host tests (tests/: the remote protocol, its command handler, the tui's model and graphs) with clang
+# -Weverything + ASan/UBSan and gcc -Wconversion; then the remote (tui/, RTXUI) and its end-to-end test (jbc_tui
+# --dump/--render against jbc_fake). tests/ and tui/ fetch aglio and RTXUI themselves (a checkout next to this one wins
+# locally). firmware: both variants in the kvasirio/atsamd21 image (Kvasir_SDK's chip-image.yml builds it).
+
+on:
+    push:
+        branches: [master]
+    pull_request:
+        branches: [master]
+    workflow_dispatch:
+
+jobs:
+    host-tests:
+        runs-on: ubuntu-latest
+        container:
+            image: archlinux:latest
+        strategy:
+            fail-fast: false
+            matrix:
+                compiler: [clang++, g++]
+        steps:
+            - name: Tools
+              run: pacman -Syu --noconfirm --needed clang gcc cmake ninja git python diffutils
+            - uses: actions/checkout@v4
+            - name: Configure
+              run: cmake -S tests -B build -G Ninja -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+            - name: Build
+              run: cmake --build build
+            - name: Test
+              run: ctest --test-dir build --output-on-failure
+
+            # clang-tidy (Kvasir_SDK master's tools/tidy.py and .clang-tidy, .github/actions/tidy) over this tree:
+            # this repository's findings fail, the libraries' are counted as foreign
+            - name: clang-tidy
+              if: matrix.compiler == 'clang++'
+              uses: kvasir-io/Kvasir_SDK/.github/actions/tidy@master
+              timeout-minutes: 30
+              with:
+                trees: build
+            - name: Remote (tui/) and its end-to-end test against the fake station
+              run: |
+                cmake -S tui -B build-tui -G Ninja -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+                cmake --build build-tui
+                ctest --test-dir build-tui --output-on-failure
+
+    firmware:
+        runs-on: ubuntu-latest
+        container:
+            image: docker.io/kvasirio/atsamd21:latest
+        steps:
+            - uses: actions/checkout@v4
+            - name: Configure git safe directory
+              run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+            - name: Build debug and release (a warning fails)
+              run: |
+                cmake -S . -B docker_build -G Ninja -DUSE_FORCE_FETCH=ON
+                cmake --build docker_build --target debug release 2>&1 | tee build.log
+                ! grep -E "warning:" build.log

@@ -1,28 +1,25 @@
 cmake_minimum_required(VERSION 3.28)
 
-if(NOT KVASIR_ROOT)
-    if(DEFINED ENV{KVASIR_ROOT})
-        set(KVASIR_ROOT $ENV{KVASIR_ROOT})
-    else()
-        include(FetchContent)
-        FetchContent_Declare(
-            Kvasir_SDK
-            GIT_REPOSITORY https://github.com/kvasir-io/Kvasir_SDK.git
-            GIT_TAG master)
-        FetchContent_Declare(
-            chip_atsamd21
-            GIT_REPOSITORY https://github.com/kvasir-io/chip_atsamd21.git
-            GIT_TAG master)
-        FetchContent_Declare(
-            kvasir_devices
-            GIT_REPOSITORY https://github.com/kvasir-io/kvasir_devices.git
-            GIT_TAG master)
-        FetchContent_MakeAvailable(Kvasir_SDK chip_atsamd21 kvasir_devices)
-        set(KVASIR_ROOT ${kvasir_sdk_SOURCE_DIR})
-        set(CHIP_ROOT ${chip_atsamd21_SOURCE_DIR})
-        set(KVASIR_DEVICES_ROOT ${kvasir_devices_SOURCE_DIR})
-    endif()
+# Kvasir_SDK: KVASIR_ROOT (variable or environment), else the checkout next to this repository, else fetched; the chip
+# package and kvasir_devices the same way (kvasir_locate: Kvasir_SDK cmake/kvasir_locate.cmake)
+if(NOT KVASIR_ROOT AND DEFINED ENV{KVASIR_ROOT})
+    set(KVASIR_ROOT "$ENV{KVASIR_ROOT}")
 endif()
+if(NOT KVASIR_ROOT AND EXISTS "${CMAKE_CURRENT_LIST_DIR}/../Kvasir_SDK/cmake/kvasir_locate.cmake")
+    get_filename_component(KVASIR_ROOT "${CMAKE_CURRENT_LIST_DIR}/../Kvasir_SDK" ABSOLUTE)
+elseif(NOT KVASIR_ROOT)
+    include(FetchContent)
+    FetchContent_Declare(
+        kvasir_sdk
+        GIT_REPOSITORY https://github.com/kvasir-io/Kvasir_SDK.git
+        GIT_TAG master
+        GIT_SHALLOW TRUE
+        GIT_SUBMODULES "" SOURCE_SUBDIR fetch-only)
+    FetchContent_MakeAvailable(kvasir_sdk)
+    set(KVASIR_ROOT "${kvasir_sdk_SOURCE_DIR}")
+endif()
+include("${KVASIR_ROOT}/cmake/kvasir_locate.cmake")
+kvasir_locate(USE_ENVIRONMENT SDK_SUBMODULES ALL CHIP chip_atsamd21 DEVICES)
 
 include(${KVASIR_ROOT}/cmake/kvasir.cmake)
 
@@ -33,10 +30,17 @@ project(
 
 include(${KVASIR_ROOT}/cmake/util.cmake)
 
-add_executable(debug src/main.cpp)
-target_configure_kvasir(debug OPTIMIZATION_STRATEGY size USE_LOG)
-target_link_libraries(debug kvasir::devices)
-
-add_executable(release src/main.cpp)
-target_configure_kvasir(release OPTIMIZATION_STRATEGY size)
-target_link_libraries(release kvasir::devices)
+# Two variants, debug and release, both built for size.
+kvasir_executable_variants(
+    ""
+    SOURCES
+    src/main.cpp
+    LIBRARIES
+    kvasir::devices
+    VARIANTS
+    debug
+    release
+    OPTIMIZATION
+    size
+    DEBUG_OPTIMIZATION
+    size)

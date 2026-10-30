@@ -1,58 +1,17 @@
 #pragma once
 
-bool dbgpres();
-
-struct DebuggerPresentFunction {
-    bool operator()() { return dbgpres(); }
-};
-
-#include "uc_log/DefaultRttComBackend.hpp"
-
-namespace uc_log {
-// A record from an ISR is written with interrupts masked (IsrPolicy::MaskedRecord), so ISRs at
-// different priority levels share the ISR buffer; Startup refuses that mix of levels otherwise.
-template<>
-struct ComBackend<uc_log::Tag::User>
-  : public DefaultRttComBackend<DebuggerPresentFunction,
-                                512,
-                                4096,
-                                rtt::BufferMode::skip,
-                                DuplexChannels<>,
-                                IsrPolicy::MaskedRecord> {};
-}   // namespace uc_log
-
-// need to be included first
-
-#include "chip/Interrupt.hpp"
-#include "core/core.hpp"
+// uc_log.hpp reads kvasir_config.hpp (log sink, log clock) before anything else; every other header in
+// any order.
+#include "chip/chip.hpp"
 #include "uc_log/uc_log.hpp"
 
-namespace HW {
-static constexpr auto ClockSpeed   = 48'000'000;
-static constexpr auto CrystalSpeed = 8'000'000;
-
-struct SystickClockConfig {
-    static constexpr auto clockBase = Kvasir::Systick::useProcessorClock;
-
-    static constexpr auto clockSpeed     = ClockSpeed;
-    static constexpr auto minOverrunTime = std::chrono::hours(24 * 365) * 20;
-};
-
-using SystickClock = Kvasir::Systick::SystickClockBase<SystickClockConfig>;
-}   // namespace HW
-
-namespace uc_log {
-template<>
-struct LogClock<uc_log::Tag::User> : public HW::SystickClock {};
-}   // namespace uc_log
-
-#include "chip/chip.hpp"
-
-bool inline dbgpres() {
-    return apply(read(Kvasir::Peripheral::DSU::Registers<>::STATUSB::dbgpres));
-}
+#include <chip/Fuses.hpp>
+#include <kvasir/Hal/Uart.hpp>
 
 namespace HW {
+static constexpr auto crystalSpeed   = 8'000'000;
+static constexpr auto WDTClockDivide = 32;   // OSCULP32K down to the 1.024 kHz the WDT counts
+
 using ComBackend = uc_log::ComBackend<uc_log::Tag::User>;
 
 namespace Pin {
@@ -98,54 +57,29 @@ namespace Pin {
 }   // namespace Pin
 
 struct ClockSettings {
+    /// XOSC 8 MHz -> FDPLL96M -> GCLK0 at 48 MHz, from the target (chip/ClockTree.hpp): the solver
+    /// takes the lowest DCO (48 MHz: errata DS80000760M 1.3.2 makes the FDPLL96M above 64 MHz
+    /// unusable below 0 C on revisions A-D) and a 1 MHz reference (DIV 3) inside the 32 kHz..2 MHz
+    /// f_IN of SAM D21 Tables 37-58/59/60; LBYPASS is on (errata 1.3.5, every revision: below 25 C
+    /// a spurious unlock halts the output). The wait states come from Table 37-42 at 2.7-3.63 V.
+    using Tree = Kvasir::Clocks::Sam::Tree<{.cpu            = clockSpeedValue,
+                                            .source         = {.hz = crystalSpeed},
+                                            .supply         = Kvasir::Nvm::Supply::from2V7,
+                                            .dpllRunStandby = true}>;
+    // The tree's clocks, and what peripheryClockInit routes (atsam_common Clocks.hpp): generator 3
+    // (the FDPLL at ClockSpeed / 32) to SERCOM3, whose I2C claims its core clock at clockSpeed.
+    // Generator 0 (the CPU clock) to SERCOM1, the remote's USART (DebugUartConfig).
+    using Provides = brigand::append<
+      Tree::Provides,
+      brigand::list<Kvasir::Hal::Clk<Kvasir::Clocks::ClkSercomCore<3>, clockSpeedValue / 32>,
+                    Kvasir::Hal::Clk<Kvasir::Clocks::ClkSercomCore<1>, clockSpeedValue>>>;
+
+    // the expected solver result: DIV 3, LDR 47, GCLK0 / 1, 1 wait state
+    static_assert(Tree::dpll.div == 3 && Tree::dpll.ldr == 47 && Tree::dpll.ldrFrac == 0
+                  && Tree::dpll.gclkDiv == 1 && Tree::waitStates == 1);
+
     static void coreClockInit() {
-        using Kvasir::Register::value;
-        // ClockSpeed=(CrystalSpeed*(1/(2*(DPLL_div+1))))*(DPLL_ldr+1+(DPLL_ldrfrac/16))/GENDIV_div
-        // if ClockSpeed > 24MHZ flash_waitstates=1 else 0
-
-        using namespace Kvasir::GCLK;
-        using KSR                              = Kvasir::Peripheral::SYSCTRL::Registers<>;
-        using KNR                              = Kvasir::Peripheral::NVMCTRL::Registers<>;
-        static constexpr auto flash_waitstates = KNR::CTRLB::RWSVal::half;
-        static constexpr auto DPLL_ldr         = 3095;
-        static constexpr auto DPLL_ldrfrac     = 0;
-        static constexpr auto DPLL_div         = 128;
-        static constexpr auto GENDIV_div       = 2;
-        // 48'000'000=(8000000*(1/(2*(128+1))))*(3095+1+(0/16))/2
-
-        static_assert(ClockSpeed
-                        == std::uint64_t((CrystalSpeed * (1.0 / (2.0 * (double(DPLL_div) + 1.0))))
-                                         * (double(DPLL_ldr) + 1.0 + (double(DPLL_ldrfrac) / 16.0))
-                                         / double(GENDIV_div)),
-                      "ClockSpeed wrong");
-
-        static_assert(ClockSpeed <= 24'000'000 || flash_waitstates == KNR::CTRLB::RWSVal::half,
-                      "need flash_waitstates");
-
-        apply(KSR::XOSC::overrideDefaults(write(KSR::XOSC::startup, value<std::uint16_t, 15>()),
-                                          set(KSR::XOSC::ampgc),
-                                          write(KSR::XOSC::GAINValC::_2),
-                                          clear(KSR::XOSC::ondemand),
-                                          set(KSR::XOSC::runstdby),
-                                          set(KSR::XOSC::xtalen),
-                                          set(KSR::XOSC::enable)));
-        // wait for XOSCRDY ready
-        while(!apply(read(KSR::PCLKSR::xoscrdy))) {}
-
-        apply(write(KSR::DPLLRATIO::ldr, value<DPLL_ldr>()),
-              write(KSR::DPLLRATIO::ldrfrac, value<DPLL_ldrfrac>()),
-              KSR::DPLLCTRLB::overrideDefaults(write(KSR::DPLLCTRLB::div, value<DPLL_div>()),
-                                               write(KSR::DPLLCTRLB::REFCLKValC::ref1)),
-              Kvasir::Register::sequencePoint,
-              KSR::DPLLCTRLA::overrideDefaults(clear(KSR::DPLLCTRLA::ondemand),
-                                               set(KSR::DPLLCTRLA::enable),
-                                               set(KSR::DPLLCTRLA::runstdby)));
-        // wait for clkrdy ready
-        while(!apply(read(KSR::DPLLSTATUS::clkrdy))) {}
-
-        apply(KNR::CTRLB::overrideDefaults(
-                write(KNR::CTRLB::rws, value<KNR::CTRLB::RWSVal, flash_waitstates>())),
-              GenericClockGenerator<0, GeneratorSource::fdpll, GENDIV_div>::enable());
+        Tree::coreClockInit();
 
         /*
         // WD clock
@@ -169,35 +103,36 @@ struct ClockSettings {
 
     static void peripheryClockInit() {
         using namespace Kvasir::GCLK;
-        apply(GenericClockGenerator<3, GeneratorSource::fdpll, 64>::enable(),
+        apply(GenericClockGenerator<3, GeneratorSource::fdpll, 32>::enable(),   // 1.5 MHz
+              GenericClockGenerator<4, GeneratorSource::osculp32k, WDTClockDivide>::enable(),
               Kvasir::Register::sequencePoint,
               PeripheralChannelController<0, Peripheral::sercom1_core>::enable(),
               PeripheralChannelController<0, Peripheral::eic>::enable(),
               PeripheralChannelController<0, Peripheral::adc>::enable(),
               PeripheralChannelController<0, Peripheral::evsys_0>::enable(),
-              PeripheralChannelController<3, Peripheral::sercom3_core>::enable());
+              PeripheralChannelController<3, Peripheral::sercom3_core>::enable(),
+              PeripheralChannelController<4, Peripheral::wdt>::enable());
     }
 };
 
-/*
+/// The remote's UART (remote/Protocol.hpp) on the debug pins: TX on PA18 = SERCOM1/PAD[2], RX on PA19 =
+/// SERCOM1/PAD[3], both peripheral function C (SAM D21 DS40001882L Table 7-1, I/O multiplexing); TXPO and RXPO come
+/// from the chip's pad table (Sercom_Usart.hpp).
 struct DebugUartConfig {
-    static constexpr auto clockSpeed = ClockSpeed;
-
-    static constexpr auto usartInstance    = 1;
-    static constexpr auto rxPinLocation    = Kvasir::Sercom::Usart::NotUsed{};
-    static constexpr auto txPinLocation    = Pin::debugTx{};
-    static constexpr auto baudRate         = 115'200;
-    static constexpr auto maxBaudRateError = std::ratio<1, 10000>{};
-    static constexpr auto dataBits         = Kvasir::Sercom::Usart::DataBits::_8;
-    static constexpr auto parity           = Kvasir::Sercom::Usart::Parity::none;
-    static constexpr auto stopBits         = Kvasir::Sercom::Usart::StopBits::_1;
-    static constexpr auto IsrPriority      = 3;
-
-    static constexpr auto userConfigOverride = brigand::list<>{};
+    static constexpr auto clockSpeed    = clockSpeedValue;   // claims ClkSercomCore<1> at this rate
+    static constexpr auto instance      = 1;
+    static constexpr auto txPinLocation = Pin::debugTx{};
+    static constexpr auto rxPinLocation = Pin::debugRx{};
+    static constexpr auto baudRate      = 115'200;
+    static constexpr auto dataBits      = Kvasir::Hal::Uart::DataBits::bits8;
+    static constexpr auto parity        = Kvasir::Hal::Uart::Parity::none;
+    static constexpr auto stopBits      = Kvasir::Hal::Uart::StopBits::stop1;
+    static constexpr auto isrPriority
+      = 3;   // below the ADC (1) and the EIC (2): the heater timing first
 };
-*/
+
 struct I2CConfig {
-    static constexpr auto clockSpeed = ClockSpeed / 32;
+    static constexpr auto clockSpeed = clockSpeedValue / 32;
 
     static constexpr auto instance       = 3;
     static constexpr auto sdaPinLocation = Pin::Sda{};
@@ -206,28 +141,20 @@ struct I2CConfig {
     static constexpr auto isrPriority    = 3;
 };
 
-struct Fault_CleanUpAction {
-    void operator()() {
-        apply(clear(HW::Pin::tip1Sw{}),
-              clear(HW::Pin::tip2Sw{}),
-              clear(HW::Pin::tip3Sw1{}),
-              clear(HW::Pin::tip3Sw2{}),
-              clear(HW::Pin::tipComSw{}),
-              clear(HW::Pin::tip1TcSw{}),
-              clear(HW::Pin::tip2TcSw{}),
-              clear(HW::Pin::tip3TcSw1{}),
-              clear(HW::Pin::tip3TcSw2{}),
-              clear(HW::Pin::sleepSw{}),
-              clear(HW::Pin::piezo{}),
-              clear(HW::Pin::select_24_48{}),
-              clear(HW::Pin::trafoTemp{}));
-    }
+/// The watchdog (chip_atsam_common Wdt.hpp): generator 4 makes 32.768 kHz / 32 = 1.024 kHz of the
+/// OSCULP32K, 2 s is CONFIG.PER 0x8 (2048 cycles). The heater runs from the ADC interrupt, so a main loop
+/// that stops turning does not stop it: the reset does (the pins are inputs again).
+struct WatchdogConfig {
+    static constexpr auto clockSpeed  = 32'768 / WDTClockDivide;
+    static constexpr auto overrunTime = std::chrono::seconds{2};
 };
+
+using Watchdog = Kvasir::Watchdog<WatchdogConfig>;
 
 constexpr Kvasir::Fuses::FuseBits fuseBits() {
     using namespace Kvasir::Fuses;
     FuseBits sollFuseBits{
-      Bod33{Bod33::Action::Reset,
+      Bod33{Bod33::Action::reset,
             Bod33::Enable::enabled,
             Bod33::Hysteresis::enabled,
             Bod33::Level{40}},
@@ -286,6 +213,27 @@ struct PinConfig {
              set(HW::Pin::tip1Sw{}));
     // apply(clear(HW::Pin::tip2TcSw{}));
     // apply(set(HW::Pin::select_24_48{}));
+
+    // The safe state (Hook::SafeState): every heater and tip switch off. Every fatal path runs it (the image's
+    // fatal start, ApplicationConfig.hpp), and main() does when it gives up. PORT writes only; PORT's bus clock is
+    // on from reset (D21 DS 16.8.9 APBBMASK, reset 0x7F).
+    static void safeState() {
+        apply(clear(HW::Pin::tip1Sw{}),
+              clear(HW::Pin::tip2Sw{}),
+              clear(HW::Pin::tip3Sw1{}),
+              clear(HW::Pin::tip3Sw2{}),
+              clear(HW::Pin::tipComSw{}),
+              clear(HW::Pin::tip1TcSw{}),
+              clear(HW::Pin::tip2TcSw{}),
+              clear(HW::Pin::tip3TcSw1{}),
+              clear(HW::Pin::tip3TcSw2{}),
+              clear(HW::Pin::sleepSw{}),
+              clear(HW::Pin::piezo{}),
+              clear(HW::Pin::select_24_48{}),
+              clear(HW::Pin::trafoTemp{}));
+    }
+
+    using Extends = Kvasir::Startup::Extend<Kvasir::Hook::SafeState, &safeState>;
 };
 
 }   // namespace HW

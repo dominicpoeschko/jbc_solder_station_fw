@@ -7,9 +7,13 @@
 #include "kvasir/Io/Io.hpp"
 
 #include <atomic>
+#include <chip/atsam_common/EIC.hpp>
 #include <chrono>
 
-template<typename Clock, typename ZCpin>
+/// The mains zero crossings on an EXTINT line (both edges, no pull, no filter, with its event
+/// output for the heater timing). Listing it in Startup is all it takes; EicPriority is the
+/// NVIC priority of the EIC interrupt (all lines on it must agree).
+template<typename Clock, typename ZCpin, int EicPriority>
 struct ZeroCrossDectecor {
     static constexpr std::size_t averages = 64;
 
@@ -29,8 +33,8 @@ struct ZeroCrossDectecor {
             if(currentAverages != averages) { ++currentAverages; }
         }
 
-        auto& currentAvg = edge ? avgE1 : avgE2;
-        auto& nextAvg    = edge ? avgE2 : avgE1;
+        auto&       currentAvg = edge ? avgE1 : avgE2;
+        auto const& nextAvg    = edge ? avgE2 : avgE1;
 
         currentAvg
           = (currentAvg * currentAverages + (now - lastCrossing) * 8) / (currentAverages + 8);
@@ -40,12 +44,17 @@ struct ZeroCrossDectecor {
         lastCrossing = now;
     }
 
-    struct EicConfig {
-        static constexpr auto pin         = ZCpin{};
-        static constexpr auto pull        = Kvasir::Io::PullConfiguration::PullNone;
-        static constexpr auto type        = Kvasir::EIC::InterruptType::EdgeBoth;
-        static constexpr auto filter      = false;
-        static constexpr auto callback    = edgeCallback;
-        static constexpr auto enableEvent = true;
-    };
+    using EicLine = Kvasir::EIC::ExtInt<ZCpin,
+                                        Kvasir::EIC::InterruptType::edgeBoth,
+                                        &edgeCallback,
+                                        EicPriority,
+                                        Kvasir::Io::PullConfiguration::pullNone,
+                                        false,
+                                        true>;
+
+    using Provides                                = typename EicLine::Provides;
+    using Claims                                  = typename EicLine::Claims;
+    using SubIsrs                                 = typename EicLine::SubIsrs;
+    static constexpr auto initStepPinConfig       = EicLine::initStepPinConfig;
+    static constexpr auto initStepPeripheryConfig = EicLine::initStepPeripheryConfig;
 };

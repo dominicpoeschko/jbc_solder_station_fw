@@ -29,7 +29,7 @@ struct UnBounce {
 
     void setValue(bool const bounceVal) { bounceVal_ = bounceVal; }
 
-    bool getValue() const { return unBouncedVal_; }
+    [[nodiscard]] bool getValue() const { return unBouncedVal_; }
 
     template<class... Ts>
     struct overloaded : Ts... {
@@ -46,7 +46,7 @@ struct UnBounce {
                           std::forward<Variant>(variant));
     }
 
-    void handler() {
+    void turn() {
         auto const currentTime = Clock::now();
 
         st_ = match(
@@ -56,25 +56,19 @@ struct UnBounce {
               {
                   bounceValOld_ = bounceVal_;
                   return WaitSecondValue{currentTime + bounceTime_};
-              } else {
-                  return state;
               }
+              return state;
           },
           [&](WaitSecondValue const& state) -> stateMachine {
-              if(currentTime > state.bounceTimeOut) {
-                  return StillEqual{};
-              } else {
-                  return state;
-              }
+              if(currentTime > state.bounceTimeOut) { return StillEqual{}; }
+              return state;
           },
           [&](StillEqual const&) -> stateMachine {
               if(bounceVal_ == bounceValOld_) {
                   bounceValOld_ = bounceVal_;
                   unBouncedVal_ = bounceVal_;
-                  return Idle{};
-              } else {
-                  return Idle{};
               }
+              return Idle{};
           });
     }
 };

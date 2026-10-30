@@ -5,8 +5,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <kvasir/Devices/I2C/Adapters/SegmentBackends.hpp>
 #include <kvasir/Devices/I2C/Device.hpp>
-#include <kvasir/Devices/I2C/SegmentBackends.hpp>
 #include <kvasir/Devices/I2C/chips/Pca9956b.hpp>
 
 /// The three digits on the PCA9956B: the preset temperature, steady or blinking while it is
@@ -19,10 +19,13 @@ struct DisplayManager {
 
     std::uint32_t displayValue{};
 
-    Device                               display{};
+    /// The device lives on the application's Bus with the other part of the board (one engine
+    /// for both); this only drives the digits on it.
+    Device&                              display;
     Kvasir::I2C::Pca9956bDisplay<Device> digits{display, Kvasir::Units::milliAmp(5)};
 
-    DisplayManager()                                 = default;
+    explicit DisplayManager(Device& device) : display{device} {}
+
     DisplayManager(DisplayManager const&)            = delete;   // digits points at display
     DisplayManager& operator=(DisplayManager const&) = delete;
 
@@ -30,9 +33,8 @@ struct DisplayManager {
 
     void setStaticMode() { digits.blink(Kvasir::SegmentDisplay::Blink::off); }
 
-    void handler() {
+    void turn() {
         digits.setNumber(static_cast<std::int32_t>(std::min(displayValue, std::uint32_t{999})));
         digits.update(Clock::now());
-        display.handler();
     }
 };

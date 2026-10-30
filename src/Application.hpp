@@ -13,6 +13,7 @@
 #include "displayManager.hpp"
 #include "kvasir/Devices/Max31820.hpp"
 
+#include <kvasir/Devices/I2C/Bus.hpp>
 #include <kvasir/Devices/I2C/Device.hpp>
 #include <kvasir/Devices/I2C/chips/Ktd2026.hpp>
 
@@ -21,10 +22,14 @@ struct Application {
     using time_point_t = typename Clock::time_point;
 
     Kvasir::Max31820<TempOneWire, Clock> tempSensTransformer;
-    DisplayManager<I2C, Clock>           display;
-    using Rgb = Kvasir::I2C::Chips::Ktd2026<>;
-    Kvasir::I2C::Device<I2C, Clock, Rgb> ledDriver;
-    Temp_t                               heaterManager;
+    using Rgb    = Kvasir::I2C::Chips::Ktd2026<>;
+    using RgbDev = Kvasir::I2C::Device<I2C, Clock, Rgb>;
+    using Digits = typename DisplayManager<I2C, Clock>::Device;
+    /// Both parts of the board on one Bus: one device set, one engine (kvasir_devices SetOps.hpp).
+    Kvasir::I2C::Bus<I2C, Clock, Digits, RgbDev> parts{};
+    DisplayManager<I2C, Clock>                   display{parts.template get<Digits>()};
+    RgbDev&                                      ledDriver = parts.template get<RgbDev>();
+    Temp_t                                       heaterManager;
 
     //TODO change rotary type to right data type
     RotaryEncoder::type solderTemp_;
@@ -34,6 +39,13 @@ struct Application {
 
     std::uint32_t actionCounter_{1};
     std::uint32_t menuTimeOutCounter_{1};
+
+    /// Remote-tunable (remote/Tunables.hpp), RAM only: TimingConfig.hpp's values after every boot.
+    typename Clock::duration standbyTimeOut_{timingConfig::standbyTimeOut};
+    typename Clock::duration sleepTimeOut_{timingConfig::sleepTimeOut};
+
+    /// The status LED as last set (the remote shows it).
+    Rgb::Colour::Value led_{};
 
     time_point_t next{Clock::now()};
     time_point_t menuTime{Clock::now() + timingConfig::menuTimeOut};
@@ -67,11 +79,38 @@ struct Application {
     stateMachine st_{Init{}};
 
     Application() {
-        solderTemp_ = RotaryEncoder::type{TempEeeprom::value().temp};
+        solderTemp_ = RotaryEncoder::type{static_cast<std::uint16_t>(
+          Remote::sanitized(TempEeeprom::value().values)[Remote::solderC])};
         heaterManager.setTemp(solderTemp_);
         AdcIsr::temp = &heaterManager;
         RotaryEncoder::cnt.store(solderTemp_, std::memory_order_relaxed);
     }
+
+    void setLed(Rgb::Colour::Value const& c) {
+        led_ = c;
+        ledDriver.template set<Rgb::Colour>(c);
+    }
+
+    /// The solder temperature as a knob press takes it: the knob and the display move to it, the EEPROM stores it.
+    void setSolderTemp(std::uint16_t c) {
+        solderTemp_ = RotaryEncoder::type{c};
+        RotaryEncoder::cnt.store(solderTemp_, std::memory_order_relaxed);
+        preSetTemp_                                  = solderTemp_;
+        TempEeeprom::value().values[Remote::solderC] = solderTemp_;
+        TempEeeprom::writeValue();
+    }
+
+    void setSleepTemp(std::uint16_t c) { sleepTemp_ = RotaryEncoder::type{c}; }
+
+    /// New timeouts count from the next state change.
+    void setTimeouts(typename Clock::duration standby,
+                     typename Clock::duration sleepDelay) {
+        standbyTimeOut_ = standby;
+        sleepTimeOut_   = sleepDelay;
+    }
+
+    /// Application::stateMachine's index: Protocol::State.
+    [[nodiscard]] std::size_t state() const { return st_.index(); }
 
     bool tip1oldSleep{false};
     bool tip1oldRemoved{false};
@@ -91,7 +130,7 @@ struct Application {
                           std::forward<Variant>(variant));
     }
 
-    void handler() {
+    void turn() {
         auto const currentTime{Clock::now()};
         //TODO
         bool         tip1Sleep{heaterManager.tip1Sleep};
@@ -110,8 +149,8 @@ struct Application {
                 {
                     //        modeChange           = true;
                     //        rotaryMode           = false;
-                    solderTemp_          = preSetTemp_;
-                    TempEeeprom::value() = TempSaveType{solderTemp_};
+                    solderTemp_                                  = preSetTemp_;
+                    TempEeeprom::value().values[Remote::solderC] = solderTemp_;
                     TempEeeprom::writeValue();
 
                     //display.setStaticMode();
@@ -119,8 +158,8 @@ struct Application {
                 }
                 break;
             //TODO change button type
-            case Button::Event::Type::hit:         break;
-            case Button::Event::Type::longPress:   break;
+            case Button::Event::Type::hit:
+            case Button::Event::Type::longPress:
             case Button::Event::Type::releaseLong: break;
             }
         });
@@ -137,27 +176,25 @@ struct Application {
           st_,
           [&]([[maybe_unused]] Init const& state) -> stateMachine {
               //Do init steps
-              return Sleep{currentTime + timingConfig::sleepTimeOut,
-                           currentTime + timingConfig::standbyTimeOut};
+              return Sleep{currentTime + sleepTimeOut_, currentTime + standbyTimeOut_};
           },
           [&](Sleep const& state) -> stateMachine {
               if(currentTime > state.timeOutSleep) {
-                  ledDriver.template set<Rgb::Colour>({0, 0, 3});
+                  setLed({0, 0, 3});
                   heaterManager.setTemp(sleepTemp_);
               } else {
-                  ledDriver.template set<Rgb::Colour>({0, 3, 0});
+                  setLed({0, 3, 0});
               }
 
               if(currentTime > state.timeOutStandby) { return Standby{}; }
               if(tip1Sleep) { return state; }
-              return Solder{currentTime + timingConfig::standbyTimeOut};
+              return Solder{currentTime + standbyTimeOut_};
           },
           [&](Solder const& state) -> stateMachine {
-              ledDriver.template set<Rgb::Colour>({0, 0, 0});
+              setLed({0, 0, 0});
               heaterManager.setTemp(solderTemp_);
               if(tip1Sleep) {
-                  return Sleep{currentTime + timingConfig::sleepTimeOut,
-                               currentTime + timingConfig::standbyTimeOut};
+                  return Sleep{currentTime + sleepTimeOut_, currentTime + standbyTimeOut_};
               }
               if(tip1Removed) { return Remove{}; }
               if(currentTime > state.timeOutStandby) { return Standby{}; }
@@ -165,30 +202,28 @@ struct Application {
           },
           [&](Remove const& state) -> stateMachine {
               heaterManager.setTemp(0);
-              ledDriver.template set<Rgb::Colour>({1, 0, 2});
+              setLed({1, 0, 2});
               if(tip1Removed) { return state; }
-              return Sleep{currentTime + timingConfig::sleepTimeOut,
-                           currentTime + timingConfig::standbyTimeOut};
+              return Sleep{currentTime + sleepTimeOut_, currentTime + standbyTimeOut_};
           },
           [&](Standby const& state) -> stateMachine {
-              ledDriver.template set<Rgb::Colour>({1, 1, 0});
+              setLed({1, 1, 0});
               heaterManager.setTemp(0);
               if(handlingEvent > 0) {
                   handlingEvent = 0;
-                  return Sleep{currentTime + timingConfig::sleepTimeOut,
-                               currentTime + timingConfig::standbyTimeOut};
+                  return Sleep{currentTime + sleepTimeOut_, currentTime + standbyTimeOut_};
               }
               return state;
           },
           [&](Shutdown const& state) -> stateMachine {
               heaterManager.setTemp(0);
-              ledDriver.template set<Rgb::Colour>({10, 0, 0});
+              setLed({10, 0, 0});
               //To leave this state you must reboot the system
               return state;
           });
 
         if(heaterManager.heaterOn) {
-            ledDriver.template set<Rgb::Colour>({1, 0, 0});
+            setLed({1, 0, 0});
         } else {
         }
 
@@ -200,17 +235,17 @@ struct Application {
         }
         display.displayValue = preSetTemp_;
 
-        tempSensTransformer.handler();
-        display.handler();
-        ledDriver.handler();
-        heaterManager.handler();
-        TempOneWire::handler();
+        tempSensTransformer.turn();
+        display.turn();
+        parts.turn();
+        heaterManager.turn();
+        TempOneWire::turn();
     }
 
     void fault() {
         //Display ERR
-        ledDriver.template set<Rgb::Colour>({10, 0, 0});
-        ledDriver.handler();
-        display.handler();
+        setLed({10, 0, 0});
+        display.turn();
+        parts.turn();
     }
 };
