@@ -59,6 +59,16 @@ std::filesystem::path rttLogDir() {
     return TUI_RTT_LOG_DIR;
 }
 
+/// The link's path as the title bar shows it: its tail, "…" in front past 32 bytes. The bar has no room to spare at
+/// 140 columns - a longer path squeezes every span in it ("JBC station remot", "cup 00:00:0").
+std::string barPath(std::string const& path) {
+    constexpr std::size_t MaxBytes = 32;
+    if(path.size() <= MaxBytes) { return path; }
+    auto cut = path.size() - MaxBytes;
+    while(cut < path.size() && (static_cast<unsigned char>(path[cut]) & 0xC0U) == 0x80U) { ++cut; }
+    return "…" + path.substr(cut);
+}
+
 /// The graph's windows: 1..4.
 constexpr std::array<std::pair<std::size_t, char const*>, 4> Windows{
   {{150, "15 s"}, {300, "30 s"}, {600, "1 min"}, {1'200, "2 min"}}
@@ -550,11 +560,11 @@ private:
     void rebuild() {
         auto const now  = Tui::Clock::now();
         auto const link = model_.link(now);
-        linkText
-          = std::string{Tui::name(link)} + (model_.path().empty() ? "" : "  " + model_.path());
-        linkClass = link == Tui::LinkState::live    ? "good"
-                  : link == Tui::LinkState::waiting ? "warn"
-                                                    : "bad";
+        linkText        = std::string{Tui::name(link)}
+                        + (model_.path().empty() ? "" : "  " + barPath(model_.path()));
+        linkClass       = link == Tui::LinkState::live    ? "good"
+                        : link == Tui::LinkState::waiting ? "warn"
+                                                          : "bad";
         if(link == Tui::LinkState::missing) { linkText += "  (is `just log` running?)"; }
 
         rebuildHeader(now);
@@ -638,6 +648,13 @@ private:
             bool const on = (s->flags & Protocol::Flag::heaterOn) != 0;
             heaterText    = on ? "ON" : "off";
             heaterClass   = on ? "lamp-on" : "lamp-off";
+            if((s->flags & Protocol::Flag::tipNotHeating) != 0) {
+                heaterText  = "off: tip did not warm (power cycle)";
+                heaterClass = "bad";
+            } else if((s->flags & Protocol::Flag::transformerHot) != 0) {
+                heaterText  = "held: transformer hot";
+                heaterClass = "warn";
+            }
             if((s->flags & Protocol::Flag::tipRemoved) != 0) {
                 tipPosText  = "removed from the handle";
                 tipPosClass = "warn";

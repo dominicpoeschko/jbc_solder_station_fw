@@ -15,6 +15,24 @@ this firmware only. No board on the bench: every run of it is owed (plans/refact
   watchdog, a reboot or a retry - would start heating again with nobody at the iron ("a reset would heat again", the
   comment at that loop). The README's "Safety features" list it as "station is on longer than 1 hour -> turn off".
   kvasir_work/CLAUDE.md's rule wants such a latch stated; this is it. Do not "fix" it into a recovery.
+- **Every build before 2cc02a7 (2026-10-30) can leave the heater ON for good at the 1 h exit** (found 2026-10-30
+  from a field report, "blows the fuse, stuck with the heater on"): its main ran `HW::Fault_CleanUpAction();` -
+  a struct, so a temporary and no call - and left the ADC interrupt (which switches the heater on) running while
+  nothing polled `Temp::handler()` (the only switch-off) any more, with no watchdog. Heater on at that moment, or
+  turned on by the next conversion, stays on: odds about the duty, LED red. A station that fails ~1 h after power-on
+  runs such a build. 2cc02a7 disables the ADC interrupt and really runs the safe state. The friend's station fails FAST, though, so
+  this is not the whole story; the guards added the same day for the other ways (constants: `safetyConfig` in
+  src/TimingConfig.hpp, first guesses, no station run - sam_board_runs.md "jbc heater guards"): `safeState` clears
+  `b10` too (`heat<true>()` drives it with `tipComSw`); the switch-off no longer depends on the main loop alone -
+  the ADC interrupt switches off when the next crossing's conversion finds the heater on (`lateSwitchOffs`); a
+  current conversion that never comes times out (`currentTimeOuts`); the README's transformer limit holds the heater
+  off above 50 °C, back below 45 °C (recovers by itself; no MAX31820 reading holds nothing).
+- **The second stated latch: "tip did not warm"** (2026-10-30): at full power the reading must rise 20 °C in every
+  15 s (`Temp::watchFullPower`), else `runaway` -> `Shutdown` until a power cycle, status flag `tipNotHeating`.
+  A sensor that reads low asked for full power for ever before (until the 5 min standby); a retry would do it again,
+  so it latches like the 1 h limit. Still open: the ADC runs at 48 MHz / 8 = 6 MHz, D21 max f_CLK_ADC 2.1 MHz
+  (DS40001882L 37.11.4) - the temperature factor was tuned on it, so changing it needs a station; the measured
+  current (`lastCurrentVal`) is checked against nothing.
 - The remote (below) cannot reach the latch either: `failTimeOut`/`maxRuntime` are not tunables, a latched station
   refuses every set (`Ack refused`), and no command switches the heater.
 - Everything else recovers by itself: a panic or a fault runs the safe state, records, and the watchdog (2 s, no longer

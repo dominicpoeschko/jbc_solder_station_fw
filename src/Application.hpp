@@ -171,6 +171,15 @@ struct Application {
         }
 
         if(currentTime > failTime) { st_ = Shutdown{}; }
+        // the tip did not warm at full power (Temp::watchFullPower): latched like the 1 h limit, a retry would heat
+        // at full power again
+        if(heaterManager.runaway.load(std::memory_order_relaxed)
+           && !std::holds_alternative<Shutdown>(st_))
+        {
+            UC_LOG_C("tip did not warm at full power: heater off until a power cycle");
+            st_ = Shutdown{};
+        }
+        watchTransformer();
 
         st_ = match(
           st_,
@@ -240,6 +249,21 @@ struct Application {
         parts.turn();
         heaterManager.turn();
         TempOneWire::turn();
+    }
+
+    /// The transformer's limit (safetyConfig): the heater held off while it is hot, back by itself once it cooled.
+    void watchTransformer() {
+        auto const t = tempSensTransformer.temperature();
+        if(!t) { return; }
+        auto const milliC = t->numerical_value_in(t->unit);
+        bool const held   = heaterManager.inhibited.load(std::memory_order_relaxed);
+        if(!held && milliC > safetyConfig::transformerMaxMilliC) {
+            UC_LOG_W("transformer {} m°C: heater held off", milliC);
+            heaterManager.inhibited.store(true, std::memory_order_relaxed);
+        } else if(held && milliC < safetyConfig::transformerResumeMilliC) {
+            UC_LOG_I("transformer {} m°C: heater free again", milliC);
+            heaterManager.inhibited.store(false, std::memory_order_relaxed);
+        }
     }
 
     void fault() {

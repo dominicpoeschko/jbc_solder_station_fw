@@ -3,6 +3,7 @@
 //
 
 #include "HWConfig.hpp"
+#include "TimingConfig.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -41,6 +42,22 @@ struct Temp {
     bool                          heaterOn{false};
     bool                          tip1Sleep{false};
     bool                          tip1Remove{false};
+
+    /// Set by the main loop (Application: the transformer too hot): the interrupt switches the heater on while clear only.
+    std::atomic<bool> inhibited{false};
+    /// The tip did not warm at full power (watchFullPower): the heater stays off until a power cycle.
+    std::atomic<bool> runaway{false};
+    /// Crossings at which the heater was still on because the main loop missed its switch-off (turn(),
+    /// State::wait_heater_turn_off): the interrupt switched it off there.
+    std::uint32_t lateSwitchOffs{};
+    /// Current conversions that never came (State::wait_current): the main loop switched the heater off.
+    std::uint32_t currentTimeOuts{};
+
+    bool                       fullPower{false};
+    typename Clock::time_point fullPowerSince{};
+    Float_t                    fullPowerFromC{};
+    typename Clock::time_point currentStartedAt{};
+    typename Clock::time_point heaterOnAt{};
 
     Float_t setPoint{};
 
@@ -89,6 +106,45 @@ struct Temp {
 
     std::atomic<bool> newTemp{false};
 
+    void switchOn() {
+        if(inhibited.load(std::memory_order_relaxed) || runaway.load(std::memory_order_relaxed)) {
+            return;
+        }
+        apply(HW::heat<true>(), set(heaterPin{}));
+        heaterOn   = true;
+        heaterOnAt = Clock::now();
+    }
+
+    void switchOff() {
+        apply(HW::heat<false>(), set(heaterPin{}));
+        heaterOn = false;
+    }
+
+    /// Every PID update (10 half-cycles): at full power the tip must warm by safetyConfig::heatingMinRiseC within
+    /// each heatingRiseWindow. A reading that does not move is not the tip's - a broken sensor reading low asked for
+    /// full power for ever before. Latched: a retry would heat at full power again.
+    void watchFullPower(typename Clock::time_point now,
+                        bool                       full) {
+        if(!full) {
+            fullPower = false;
+            return;
+        }
+        if(!fullPower) {
+            fullPower      = true;
+            fullPowerSince = now;
+            fullPowerFromC = lastTempVal;
+            return;
+        }
+        if(now - fullPowerSince < safetyConfig::heatingRiseWindow) { return; }
+        if(lastTempVal - fullPowerFromC < static_cast<Float_t>(safetyConfig::heatingMinRiseC)) {
+            runaway.store(true, std::memory_order_relaxed);
+            switchOff();
+            return;
+        }
+        fullPowerSince = now;
+        fullPowerFromC = lastTempVal;
+    }
+
     void adcCallback() {
         std::uint16_t val = apply(read(regs::RESULT::result));
         ++conversions;
@@ -109,21 +165,20 @@ struct Temp {
                 lastPidAt          = now;
 
                 onCyles = static_cast<std::uint16_t>(std::ceil(heatval - Float_t(0.2)));
+                watchFullPower(now, onCyles >= 10);
                 if(onCyles != 0) {
                     offCyles = 10 - onCyles;
                     if(onCyles == 10) { offCyles = 0; }
 
                     --onCyles;
-                    apply(HW::heat<true>(), set(heaterPin{}));
-                    heaterOn = true;
+                    switchOn();
                 }
             } else {
                 if(onCyles == 0) {
                     --offCyles;
                 } else {
                     --onCyles;
-                    apply(HW::heat<true>(), set(heaterPin{}));
-                    heaterOn = true;
+                    switchOn();
                 }
             }
 
@@ -145,6 +200,15 @@ struct Temp {
             s                 = State::wait_heater_turn_off;
             apply(write(regs::INPUTCTRL::MUXPOSValC::pin2));
             measureAndDisableTipPosition();
+        } else if(heaterOn && Clock::now() - heaterOnAt > safetyConfig::lateSwitchOffAfter) {
+            // The next zero crossing's conversion with the heater still on: the main loop missed its switch-off
+            // (turn(): the current at the peak, then off just before the crossing) - late or starved. Off here, so a
+            // slow loop costs one half-cycle at most; before, the heater stayed on until the loop came. Not for a
+            // conversion soon after the switch-on: noise on the unfiltered zero-cross line.
+            switchOff();
+            ++lateSwitchOffs;
+            s = State::
+              wait_temp;   // INPUTCTRL is on the tip already (pin2) in both states that get here
         }
     }
 
@@ -168,29 +232,44 @@ struct Temp {
         case State::wait_current_start:
             {
                 if(currentTime > ZCD::nextPeak.load(std::memory_order_relaxed) - 5us) {
-                    s = State::wait_current;
-                    apply(write(regs::INPUTCTRL::MUXPOSValC::pin3));
-                    apply(regs::SWTRIG::overrideDefaults(set(regs::SWTRIG::start)));
-                    enableTipPositionMeasurement();
+                    // the ADC interrupt may have moved the state on since the switch read it (its late switch-off)
+                    Kvasir::criticalSection([&] {
+                        if(s != State::wait_current_start) { return; }
+                        s                = State::wait_current;
+                        currentStartedAt = currentTime;
+                        apply(write(regs::INPUTCTRL::MUXPOSValC::pin3));
+                        apply(regs::SWTRIG::overrideDefaults(set(regs::SWTRIG::start)));
+                        enableTipPositionMeasurement();
+                    });
                 }
             }
             break;
 
         case State::wait_current:
             {
-                //TODO timeout
+                // the conversion never came (the ADC stopped): the heater must not wait for it
+                if(currentTime - currentStartedAt > safetyConfig::currentConversionTimeOut) {
+                    Kvasir::criticalSection([&] {
+                        if(s != State::wait_current) { return; }
+                        switchOff();
+                        ++currentTimeOuts;
+                        apply(write(regs::INPUTCTRL::MUXPOSValC::pin2));
+                        apply(clear(HW::Pin::sleepSw{}));
+                        s = State::wait_temp;
+                    });
+                }
             }
             break;
 
         case State::wait_heater_turn_off:
             {
                 if(currentTime > ZCD::nextCrossing.load(std::memory_order_relaxed) - 600us) {
-                    s = State::wait_temp;
-
-                    //KL_D("Sleep {}  Remove {}", tip1Sleep, tip1Remove);
-                    //TODO feed the dog
-                    apply(HW::heat<false>(), set(heaterPin{}));
-                    heaterOn = false;
+                    // off before the state says wait_temp: a conversion in between must not read the tip heated
+                    Kvasir::criticalSection([&] {
+                        if(s != State::wait_heater_turn_off) { return; }
+                        switchOff();
+                        s = State::wait_temp;
+                    });
                 }
             }
             break;

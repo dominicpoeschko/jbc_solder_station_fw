@@ -106,6 +106,7 @@ dump "$work/unsaved.txt" set=4:900 until='^tunables .* kd=0.900 .* unsaved=kd'
 [ $? -eq 0 ] || fail "kd in use, not stored"
 
 echo "== a station reset: seen, and the station starts with what is stored"
+: >"$work/reset.txt" # here, not only in the child: waitLine must not match a line of the last run's file
 "$tui" --dump "$sock" until='^station reset' >"$work/reset.txt" 2>&1 &
 dumpPid=$!
 waitLine "$work/reset.txt" '^status '
@@ -121,6 +122,7 @@ dump "$work/bad.txt" set=4:4000 store until='^ack seq=101 ok' until='^tunables .
 dump "$work/factory.txt" defaults store until='^ack seq=101 ok' \
     until='^tunables solder temp=350 .* kp=0.300 .* kd=0.200 .* unsaved=-'
 [ $? -eq 0 ] || fail "the defaults stored"
+: >"$work/reset2.txt" # here, not only in the child: waitLine must not match a line of the last run's file
 "$tui" --dump "$sock" until='^station reset' >"$work/reset2.txt" 2>&1 &
 dumpPid=$!
 waitLine "$work/reset2.txt" '^status '

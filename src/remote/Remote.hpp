@@ -237,6 +237,8 @@ private:
         if(t.tip1Remove) { flags |= Protocol::Flag::tipRemoved; }
         if(latched_) { flags |= Protocol::Flag::latched; }
         if(app.preSetTemp_ != app.solderTemp_) { flags |= Protocol::Flag::presetDirty; }
+        if(t.runaway.load(std::memory_order_relaxed)) { flags |= Protocol::Flag::tipNotHeating; }
+        if(t.inhibited.load(std::memory_order_relaxed)) { flags |= Protocol::Flag::transformerHot; }
         return Protocol::Status{
           .state    = static_cast<Protocol::State>(app.state()),
           .adc      = static_cast<Protocol::AdcState>(t.s),

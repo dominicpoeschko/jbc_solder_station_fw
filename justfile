@@ -11,7 +11,8 @@
 # `just chip_root=/path/to/chip_atsamd21 build` or $KVASIR_ROOT / $CHIP_ROOT /
 # $KVASIR_DEVICES_ROOT. If the siblings are not there, no path is passed to
 # CMake at all and CMakeLists.txt clones all three with FetchContent into
-# build/_deps.
+# build/_deps; the justfile's own tools (fw.py, tidy.py) then come from a
+# shallow SDK clone in .kvasir_sdk/ (see kvasir_root below).
 #
 # Two variants only, debug and release (kvasir_executable_variants VARIANTS debug release in CMakeLists.txt; debug is not
 # in ALL, build-all names both), so there is no release_log
@@ -45,9 +46,13 @@ build_dir := root / "build" + compiler_suffix
 # and, under the work tree's `just build`, draws from GNU make's shared job
 # pool instead - an explicit -j would opt it out of that pool.
 
-kvasir_root := env('KVASIR_ROOT', tree / 'Kvasir_SDK')
+# Kvasir_SDK: $KVASIR_ROOT, else the sibling checkout, else a shallow clone of master (no submodules) in .kvasir_sdk/ -
+# only for its tools (fw.py, tidy.py), which every recipe needs before CMake runs; CMake fetches its own copy into
+# build/_deps. `just clean-all` removes the clone, the next recipe clones master again.
+sibling_sdk := tree / "Kvasir_SDK"
+kvasir_root := env('KVASIR_ROOT', if path_exists(sibling_sdk / "tools" / "fw.py") == "true" { sibling_sdk } else { root / ".kvasir_sdk" })
 # The shared guard and build-all filter (Kvasir_SDK/tools/fw.py), from the SDK this tree builds with
-fw := kvasir_root / "tools" / "fw.py"
+fw := shell('[ -f "$1/tools/fw.py" ] || [ "$1" != "$2" ] || git clone --quiet --depth 1 https://github.com/kvasir-io/Kvasir_SDK.git "$1" >&2; echo "$1/tools/fw.py"', kvasir_root, root / ".kvasir_sdk")
 chip_root := env('CHIP_ROOT', tree / 'chip_atsamd21')
 devices_root := env('KVASIR_DEVICES_ROOT', tree / 'kvasir_devices')
 
@@ -140,9 +145,9 @@ targets: configure
 clean:
     rm -rf "{{ build_dir }}"
 
-# Remove build/ and the container-side docker_build/
+# Remove build/, the container-side docker_build/ and the cloned SDK tools (.kvasir_sdk/)
 clean-all:
-    rm -rf "{{ build_dir }}" "{{ root }}/docker_build"
+    rm -rf "{{ build_dir }}" "{{ root }}/docker_build" "{{ root }}/.kvasir_sdk"
 
 # --- the remote (tui/, src/remote/) ------------------------------------------
 

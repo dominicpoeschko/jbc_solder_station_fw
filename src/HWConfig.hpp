@@ -214,11 +214,13 @@ struct PinConfig {
     // apply(clear(HW::Pin::tip2TcSw{}));
     // apply(set(HW::Pin::select_24_48{}));
 
-    // The safe state (Hook::SafeState): every heater and tip switch off. Every fatal path runs it (the image's
-    // fatal start, ApplicationConfig.hpp), and main() does when it gives up. PORT writes only; PORT's bus clock is
-    // on from reset (D21 DS 16.8.9 APBBMASK, reset 0x7F).
+    // The safe state (Hook::SafeState): every heater and tip switch off - b10 too, which heat<true>() drives with
+    // tipComSw (it was missing until 2026-10-30). Every fatal path runs it (the image's fatal start,
+    // ApplicationConfig.hpp), and main() does when it gives up. PORT writes only; PORT's bus clock is on from reset
+    // (D21 DS 16.8.9 APBBMASK, reset 0x7F).
     static void safeState() {
-        apply(clear(HW::Pin::tip1Sw{}),
+        apply(clear(HW::Pin::b10{}),
+              clear(HW::Pin::tip1Sw{}),
               clear(HW::Pin::tip2Sw{}),
               clear(HW::Pin::tip3Sw1{}),
               clear(HW::Pin::tip3Sw2{}),

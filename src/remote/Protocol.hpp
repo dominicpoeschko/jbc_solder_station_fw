@@ -78,11 +78,15 @@ struct Telemetry {
 
 /// Status bits.
 enum Flag : std::uint8_t {
-    heaterOn    = 1U << 0,
-    tipInSleep  = 1U << 1,   ///< tip 1 in its holder
-    tipRemoved  = 1U << 2,   ///< tip 1 out of the handle
-    latched     = 1U << 3,   ///< the 1 h safety latch: off until a power cycle
-    presetDirty = 1U << 4,   ///< the knob shows a value not committed yet (display blinks)
+    heaterOn      = 1U << 0,
+    tipInSleep    = 1U << 1,   ///< tip 1 in its holder
+    tipRemoved    = 1U << 2,   ///< tip 1 out of the handle
+    latched       = 1U << 3,   ///< the 1 h safety latch: off until a power cycle
+    presetDirty   = 1U << 4,   ///< the knob shows a value not committed yet (display blinks)
+    tipNotHeating = 1U
+      << 5,   ///< the tip did not warm at full power: heater off until a power cycle
+    transformerHot = 1U
+      << 6,   ///< the transformer is over its limit: heater held off until it cooled
 };
 
 struct Status {
